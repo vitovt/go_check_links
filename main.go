@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"path"
@@ -27,6 +28,7 @@ type Crawler struct {
 	client      *http.Client
 	results     chan LinkStatus
 	wg          sync.WaitGroup
+	userAgent   string
 }
 
 // NewCrawler initializes a crawler with a given starting URL.
@@ -36,18 +38,35 @@ func NewCrawler(startURL string) (*Crawler, error) {
 		return nil, err
 	}
 
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a custom transport so we can set a common user-agent, etc.
+	transport := &http.Transport{
+		// Optional: custom settings, proxies, timeouts, etc.
+	}
+
+	client := &http.Client{
+		Jar:       jar,
+		Transport: transport,
+		// Timeout: time.Second * 10, // optionally set a timeout
+	}
+
 	return &Crawler{
-		startURL: u,
-		visited:  make(map[string]bool),
-		client:   &http.Client{},
-		results:  make(chan LinkStatus, 1000),
+		startURL:  u,
+		visited:   make(map[string]bool),
+		client:    client,
+		results:   make(chan LinkStatus, 1000),
+		userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
 	}, nil
 }
 
 // Run starts the crawling process.
 func (c *Crawler) Run(ctx context.Context) {
 	c.wg.Add(1)
-	go c.crawlURL(ctx, c.startURL)
+	go c.crawlURL(ctx, c.startURL, nil)
 
 	// Close results channel once all work is done.
 	go func() {
@@ -76,7 +95,8 @@ func (c *Crawler) markVisited(u string) bool {
 }
 
 // crawlURL fetches the given URL, checks it, and if it is an HTML page, parses it for more links.
-func (c *Crawler) crawlURL(ctx context.Context, u *url.URL) {
+// referer is the URL from which we found this link, can be nil if it's the start page.
+func (c *Crawler) crawlURL(ctx context.Context, u *url.URL, referer *url.URL) {
 	defer c.wg.Done()
 
 	if !c.shouldCrawl(u) {
@@ -89,7 +109,25 @@ func (c *Crawler) crawlURL(ctx context.Context, u *url.URL) {
 		return
 	}
 
-	resp, err := c.client.Get(uStr)
+	// Optional: Random small delay to mimic human browsing
+	// time.Sleep(time.Duration(rand.Intn(2000)+500) * time.Millisecond)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", uStr, nil)
+	if err != nil {
+		c.results <- LinkStatus{URL: uStr, Err: err}
+		return
+	}
+
+	// Set some "browser-like" headers
+	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	if referer != nil {
+		req.Header.Set("Referer", referer.String())
+	}
+
+	resp, err := c.client.Do(req)
 	status := 0
 	if resp != nil {
 		status = resp.StatusCode
@@ -104,7 +142,7 @@ func (c *Crawler) crawlURL(ctx context.Context, u *url.URL) {
 
 	// Only parse HTML pages
 	ct := resp.Header.Get("Content-Type")
-	if !strings.Contains(ct, "text/html") {
+	if !strings.Contains(strings.ToLower(ct), "text/html") {
 		return
 	}
 
@@ -116,7 +154,7 @@ func (c *Crawler) crawlURL(ctx context.Context, u *url.URL) {
 	links := extractLinks(doc, u)
 	for _, link := range links {
 		c.wg.Add(1)
-		go c.crawlURL(ctx, link)
+		go c.crawlURL(ctx, link, u)
 	}
 }
 
