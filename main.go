@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -173,14 +174,20 @@ func (c *Crawler) crawlURL(ctx context.Context, u *url.URL, referer *url.URL) {
 		return
 	}
 
-	doc, err := html.Parse(resp.Body)
+	// Read the entire body into memory so we can both print it (if debug)
+	// and parse it with html.Parse
+	bodyData, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return
 	}
 
-	// If debug enabled, print a debug message
 	if c.debug {
-		fmt.Printf("DEBUG: Retrieved HTML for %s (content output not fully implemented)\n", uStr)
+		fmt.Printf("DEBUG: Fetched HTML from %s:\n%s\n", uStr, bodyData)
+	}
+
+	doc, err := html.Parse(strings.NewReader(string(bodyData)))
+	if err != nil {
+		return
 	}
 
 	links := extractLinks(doc, u)
@@ -304,4 +311,3 @@ func main() {
 		}
 	}
 }
-
