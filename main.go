@@ -10,11 +10,12 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"golang.org/x/net/html"
 )
 
@@ -47,72 +48,6 @@ var (
 	debug      bool
 	maxNum     int
 )
-
-func initCrawlerCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "crawler <start-url>",
-		Short: "Crawl a website and check for broken links.",
-		Long: `This program crawls a website starting from <start-url>,
-     following links within the same host and scheme,
-     and reports on broken links (HTTP errors).`,
-		Args: cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			start := args[0]
-			ctx := context.Background()
-
-			c, err := NewCrawler(start, ignoreCert, delay, timeout, debug, maxNum)
-			if err != nil {
-				log.Fatalf("Error initializing crawler: %v", err)
-			}
-
-			log.Printf("Starting crawl at: %s (ignore cert: %v, delay: %v, timeout: %v, debug: %v, max-num: %d)",
-				start, ignoreCert, delay, timeout, debug, maxNum)
-			c.Run(ctx)
-			results := c.Wait()
-
-			log.Println("Crawl finished. Results:")
-			var brokenLinks []LinkStatus
-			for _, r := range results {
-				if r.Err != nil || (r.Status >= 400 && r.Status < 600) {
-					brokenLinks = append(brokenLinks, r)
-				}
-			}
-
-			for _, r := range results {
-				if r.Err != nil {
-					log.Printf("[BROKEN] %s -> Error: %v", r.URL, r.Err)
-				} else {
-					if r.Status >= 400 && r.Status < 600 {
-						log.Printf("[BROKEN] %s -> HTTP %d", r.URL, r.Status)
-					} else {
-						log.Printf("[OK] %s -> HTTP %d", r.URL, r.Status)
-					}
-				}
-			}
-
-			if len(brokenLinks) == 0 {
-				log.Println("No broken links found!")
-			} else {
-				log.Printf("Found %d broken links:", len(brokenLinks))
-				for _, b := range brokenLinks {
-					if b.Err != nil {
-						log.Printf(" - %s (%v)", b.URL, b.Err)
-					} else {
-						log.Printf(" - %s (Status: %d)", b.URL, b.Status)
-					}
-				}
-			}
-		},
-	}
-
-	cmd.Flags().BoolVarP(&ignoreCert, "ignore-cert", "i", false, "Ignore invalid (self-signed or expired) TLS certificates.")
-	cmd.Flags().DurationVarP(&delay, "delay", "d", 0, "Random delay up to this duration before each request (e.g. 2s, 500ms). Default: 0.")
-	cmd.Flags().DurationVarP(&timeout, "timeout", "t", 1*time.Second, "HTTP client timeout (e.g. 10s, 5s). Default: 1s.")
-	cmd.Flags().BoolVarP(&debug, "debug", "D", false, "Print retrieved HTML content info (for debugging).")
-	cmd.Flags().IntVarP(&maxNum, "max-num", "m", 0, "Restrict the maximum number of pages to scan. Default: no limit.")
-
-	return cmd
-}
 
 // NewCrawler initializes a crawler with a given starting URL.
 func NewCrawler(startURL string, ignoreCert bool, delay time.Duration, timeout time.Duration, debug bool, maxNum int) (*Crawler, error) {
@@ -297,15 +232,76 @@ func extractLinks(n *html.Node, base *url.URL) []*url.URL {
 }
 
 func main() {
-	rootCmd := &cobra.Command{
-		Use:   "go_check_links",
-		Short: "A website crawler to check for broken links.",
+	pflag.BoolVarP(&ignoreCert, "ignore-cert", "i", false, "Ignore invalid (self-signed or expired) TLS certificates")
+	pflag.DurationVarP(&delay, "delay", "d", 0, "Random delay up to this duration before each request (e.g. 2s, 500ms). Default: 0")
+	pflag.DurationVarP(&timeout, "timeout", "t", 10*time.Second, "HTTP client timeout (e.g. 10s, 5s). Default: 10s")
+	pflag.BoolVarP(&debug, "debug", "v", false, "Print retrieved HTML content info (for debugging)")
+	pflag.IntVarP(&maxNum, "max-num", "m", 0, "Restrict the maximum number of pages to scan. Default: no limit")
+
+	pflag.Usage = func() {
+		progName := path.Base(os.Args[0])
+		fmt.Printf("Usage: %s [options] <start-url>\n", progName)
+		fmt.Println()
+		fmt.Println("This program crawls a website starting from <start-url>, following links within the same host and scheme,")
+		fmt.Println("and reports on broken links (HTTP errors).")
+		fmt.Println()
+		pflag.PrintDefaults()
+		fmt.Println()
+		fmt.Println("Example:")
+		fmt.Printf("  %s --ignore-cert --delay=2s --timeout=5s --debug --max-num=100 https://example.com\n", progName)
 	}
 
-	rootCmd.AddCommand(initCrawlerCmd())
+	pflag.Parse()
 
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+	if pflag.NArg() < 1 {
+		pflag.Usage()
 		os.Exit(1)
 	}
+
+	start := pflag.Arg(0)
+	ctx := context.Background()
+
+	c, err := NewCrawler(start, ignoreCert, delay, timeout, debug, maxNum)
+	if err != nil {
+		log.Fatalf("Error initializing crawler: %v", err)
+	}
+
+	log.Printf("Starting crawl at: %s (ignore cert: %v, delay: %v, timeout: %v, debug: %v, max-num: %d)",
+		start, ignoreCert, delay, timeout, debug, maxNum)
+	c.Run(ctx)
+	results := c.Wait()
+
+	log.Println("Crawl finished. Results:")
+	var brokenLinks []LinkStatus
+	for _, r := range results {
+		if r.Err != nil || (r.Status >= 400 && r.Status < 600) {
+			brokenLinks = append(brokenLinks, r)
+		}
+	}
+
+	for _, r := range results {
+		if r.Err != nil {
+			log.Printf("[BROKEN] %s -> Error: %v", r.URL, r.Err)
+		} else {
+			if r.Status >= 400 && r.Status < 600 {
+				log.Printf("[BROKEN] %s -> HTTP %d", r.URL, r.Status)
+			} else {
+				log.Printf("[OK] %s -> HTTP %d", r.URL, r.Status)
+			}
+		}
+	}
+
+	if len(brokenLinks) == 0 {
+		log.Println("No broken links found!")
+	} else {
+		log.Printf("Found %d broken links:", len(brokenLinks))
+		for _, b := range brokenLinks {
+			if b.Err != nil {
+				log.Printf(" - %s (%v)", b.URL, b.Err)
+			} else {
+				log.Printf(" - %s (Status: %d)", b.URL, b.Status)
+			}
+		}
+	}
 }
+
