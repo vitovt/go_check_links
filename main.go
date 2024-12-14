@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -32,7 +34,7 @@ type Crawler struct {
 }
 
 // NewCrawler initializes a crawler with a given starting URL.
-func NewCrawler(startURL string) (*Crawler, error) {
+func NewCrawler(startURL string, ignoreCert bool) (*Crawler, error) {
 	u, err := url.Parse(startURL)
 	if err != nil {
 		return nil, err
@@ -43,9 +45,10 @@ func NewCrawler(startURL string) (*Crawler, error) {
 		return nil, err
 	}
 
-	// Create a custom transport so we can set a common user-agent, etc.
+	// Create a custom transport with optional certificate check ignoring
 	transport := &http.Transport{
 		// Optional: custom settings, proxies, timeouts, etc.
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: ignoreCert},
 	}
 
 	client := &http.Client{
@@ -200,21 +203,48 @@ func extractLinks(n *html.Node, base *url.URL) []*url.URL {
 	return links
 }
 
+func printHelp(progName string) {
+	fmt.Printf("Usage: %s [options] <start-url>\n\n", progName)
+	fmt.Println("Options:")
+	fmt.Println("  --ignore-cert   Ignore invalid (self-signed or expired) certificates.")
+	fmt.Println("  --help         Show this help message.")
+	fmt.Println()
+	fmt.Println("Example:")
+	fmt.Printf("  %s --ignore-cert https://example.com\n", progName)
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Printf("Usage: %s <start-url>\n", path.Base(os.Args[0]))
-		os.Exit(1)
+	progName := path.Base(os.Args[0])
+
+	// Set up flags
+	ignoreCert := flag.Bool("ignore-cert", false, "Ignore invalid (self-signed or expired) certificates.")
+	flag.Usage = func() {
+		printHelp(progName)
 	}
 
-	start := os.Args[1]
+	flag.Parse()
+
+	// If no arguments or --help is provided, show help
+	if flag.NArg() < 1 {
+		printHelp(progName)
+		os.Exit(1)
+	}
+	for _, arg := range os.Args[1:] {
+		if arg == "--help" {
+			printHelp(progName)
+			os.Exit(0)
+		}
+	}
+
+	start := flag.Arg(0)
 	ctx := context.Background()
 
-	c, err := NewCrawler(start)
+	c, err := NewCrawler(start, *ignoreCert)
 	if err != nil {
 		log.Fatalf("Error initializing crawler: %v", err)
 	}
 
-	log.Printf("Starting crawl at: %s", start)
+	log.Printf("Starting crawl at: %s (ignore cert: %v)", start, *ignoreCert)
 	c.Run(ctx)
 	results := c.Wait()
 
