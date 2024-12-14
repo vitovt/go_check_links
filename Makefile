@@ -18,12 +18,16 @@ endif
 
 # Optional: Versioning (you can set this dynamically)
 VERSION=$(shell \
-  latest_tag=$$(git describe --tags --abbrev=0); \
-  latest_commit=$$(git rev-parse --short HEAD); \
-  if git describe --tags --exact-match HEAD >/dev/null 2>&1; then \
-    echo "$$latest_tag"; \
+  if git diff --cached --quiet; then \
+    latest_tag=$$(git describe --tags --abbrev=0); \
+    latest_commit=$$(git rev-parse --short HEAD); \
+    if git describe --tags --exact-match HEAD >/dev/null 2>&1; then \
+      echo "$$latest_tag"; \
+    else \
+      echo "$$latest_tag-$$latest_commit""_dev"; \
+    fi; \
   else \
-    echo "$$latest_tag-$$latest_commit""_dev"; \
+    echo "9999_currentDEV"; \
   fi)
 
 OS_NAME=$$(uname -s)
