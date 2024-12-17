@@ -7,6 +7,9 @@ APP_NAME := $(shell grep -E '^module ' go.mod 2>/dev/null | awk '{print $$2}' ||
 # Output directory for binaries
 OUTPUT_DIR := bin
 
+# Check if go.mod exists
+GOMOD_EXISTS := $(shell [ -f go.mod ] && echo "yes" || echo "no")
+
 # Target architecture auto-detection
 ifndef GOARCH
   GOARCH := $(shell dpkg --print-architecture 2>/dev/null || rpm --eval %{_arch} 2>/dev/null || echo "unknown")
@@ -38,13 +41,33 @@ MAIN_FILE := main.go
 # Ensure the OUTPUT_DIR exists
 
 # Phony targets to ensure Make doesn't confuse them with files
-.PHONY: all build build-linux build-mac build-windows build-all clean prepare help format lint recreate-mod test info build-docker-windows build-docker-linux
+.PHONY: all build build-linux build-mac build-windows build-all clean prepare help format lint recreate-mod test info build-docker-windows build-docker-linux init check-go-mod
+
+# Check if go.mod exists before building
+check-go-mod:
+	@if [ "$(GOMOD_EXISTS)" = "no" ]; then \
+		echo "Warning: Project is not initialized yet (missing go.mod)."; \
+		echo "Run 'make init PROJECTNAME=<your_project_name>' to initialize the project."; \
+		exit 1; \
+	fi
+
+# Initialize Go project
+init:
+	@if [ -z "$(PROJECTNAME)" ]; then \
+		echo "Error: PROJECTNAME is not supplied. Usage: make init PROJECTNAME=<your_project_name>"; \
+		exit 1; \
+	fi
+	@echo "Initializing Go project with name '$(PROJECTNAME)'..."
+	@go mod init $(PROJECTNAME)
+	@go mod tidy
+	@echo "Project initialized successfully."
 
 help:
 	@echo "Makefile for $(APP_NAME) - Go application"
 	@echo "Usage: make [target]"
 	@echo "Targets:"
 	@echo "Main targets:"
+	@echo "  init        : Initialize a Go project (Requires PROJECTNAME)"
 	@echo "  build       : Build the application for the current architecture"
 	@echo "  build-all   : Build the application for all supported platforms"
 	@echo "  clean       : Remove build artifacts"
@@ -76,7 +99,7 @@ help:
 	@echo "  info        : Show env variables"
 	@echo ""
 	@echo "Environment Variables:"
-	@echo "  APP_NAME   : The name of the application (default: GoGasSimulator)"
+	@echo "  APP_NAME   : The name of the application (default: PROJECTNAME= after init command)"
 	@echo "  VERSION    : The version of the application based on Git tags and commit hash"
 	@echo "  GOARCH     : Target architecture for the build (default: autodetect)"
 	@echo "  OS_NAME    : Detected operating system used to choose the build target"
@@ -95,7 +118,7 @@ help:
 all: prepare build-linux #build-windows build-mac
 
 # Preparation step to download dependencies
-prepare:
+prepare: check-go-mod
 	@echo "Downloading dependencies..."
 	@go mod download
 	@echo "Dependencies downloaded."
